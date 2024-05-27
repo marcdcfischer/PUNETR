@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from src.modules.blocks.attention import WindowedMaskedAttention
 from torch.utils.checkpoint import checkpoint
 from monai.networks.blocks import MLPBlock as Mlp
+import einops
 
 
 # see https://github.com/KMnP/vpt/blob/e2dd70a5ee291d398d002e6963ddbe0f66f58038/src/models/vit_adapter/adapter_block.py#L25 for adapter adaptation
@@ -27,20 +28,19 @@ class WindowedMaskedAttentionBlock(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.adapter = adapter
 
-        self.norm1 = nn.LayerNorm(hidden_channels)
+        self.norm1 = nn.GroupNorm(hidden_channels, hidden_channels)
         self.attn = WindowedMaskedAttention(q_channels=hidden_channels,
                                             heads=heads,
                                             attn_drop=dropout_attn,
                                             proj_drop=dropout_proj,
                                             separate_norms=False,
                                             qkv_bias=qkv_bias)
-        self.norm2 = nn.LayerNorm(hidden_channels)
+        self.norm2 = nn.GroupNorm(hidden_channels, hidden_channels)
         self.mlp = Mlp(hidden_size=hidden_channels,
                        mlp_dim=int(hidden_channels * self.mlp_ratio),
                        act=act_layer,
                        dropout_rate=dropout_mlp,
                        dropout_mode="swin")
-        # self.mlp = nn.Linear(hidden_channels, hidden_channels)
 
         if self.adapter:
             self.adapter_block = Mlp(hidden_size=hidden_channels,
@@ -48,7 +48,7 @@ class WindowedMaskedAttentionBlock(nn.Module):
                                      act=act_layer,
                                      dropout_rate=dropout_mlp,
                                      dropout_mode="swin")
-            self.adapter_norm = nn.LayerNorm(hidden_channels)
+            self.adapter_norm = nn.GroupNorm(hidden_channels, hidden_channels)
 
     def forward(self,
                 x: torch.Tensor,
@@ -60,21 +60,22 @@ class WindowedMaskedAttentionBlock(nn.Module):
         :param x: Key / value content [B, P, N, C]
         :return:
         """
+        b_ = x.size(0)
 
         # Attention block
-        x_att = self.norm1(x)
+        x_att = einops.rearrange(self.norm1(einops.rearrange(x, 'b p n c -> (b p) c n')), '(b p) c n -> b p n c', b=b_)
         x_att = torch.cat([x_instructions, x_att], dim=2) if x_instructions is not None else x_att  # Concat instructions
         x_att = self.attn(x=x_att, mask=mask, pos_scores=pos_scores)
         x_att = x_att[:, :, x_instructions.shape[2]:, :] if x_instructions is not None else x_att
         x = x + x_att
 
         # Residual and MLP
-        x_mlp = self.mlp(self.norm2(x))  # For next iteration add a small MLP with at least on activation
+        x_mlp = self.mlp(einops.rearrange(self.norm2(einops.rearrange(x, 'b p n c -> (b p) c n')), '(b p) c n -> b p n c', b=b_))
         x = x + x_mlp
 
         # Adapter - with pre- and post- residual connection
         if self.adapter:
-            x = x + self.adapter_block(self.adapter_norm(x))
+            x = x + self.adapter_block(einops.rearrange(self.adapter_norm(einops.rearrange(x, 'b p n c -> (b p) c n')), '(b p) c n -> b p n c', b=b_))
 
         return x
 

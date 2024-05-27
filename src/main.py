@@ -51,7 +51,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--s3_bucket', nargs='?', const='', default='', type=str)
     parser.add_argument('--ckpt', default=None, type=str)
-    parser.add_argument('--ckpt_run_name', default=None, type=str)  # e.g. med_rep_learning_XXX
+    parser.add_argument('--ckpt_run_name', default=None, type=str)
     parser.add_argument('--cold_start', action='store_true')  # Ignores the optimizer state dict
     parser.add_argument('--no_overwrite', action='store_true')  # Keep (most) hparameters of saved checkpoint
     parser.add_argument('--plot', default=True, type=bool)
